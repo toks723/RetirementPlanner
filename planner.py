@@ -3,38 +3,56 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 
-# --- 1. CONFIG & PREMIUM DARK UI ---
-st.set_page_config(page_title="Canada Wealth Studio", layout="wide")
+# --- 1. CLEAN LIGHT UI STYLING ---
+st.set_page_config(page_title="Wealth Studio", layout="wide")
 
 st.markdown("""
     <style>
-    .stApp { background-color: #0f172a; color: #f1f5f9; }
-    .stMetric { background-color: #1e293b; padding: 20px; border-radius: 15px; border: 1px solid #334155; }
-    div[data-testid="stMetricValue"] { color: #ef4444; font-weight: 800; }
-    
-    .stButton>button { 
-        border-radius: 12px; height: 3.5em; width: 100%;
-        background: linear-gradient(135deg, #ef4444 0%, #b91c1c 100%); 
-        color: white; border: none; font-weight: 700;
+    .stApp { background-color: #f8fafc; color: #1e293b; }
+    div[data-testid="stMetric"] {
+        background-color: #ffffff;
+        padding: 20px;
+        border-radius: 12px;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        border: 1px solid #e2e8f0;
     }
-    .stButton>button:hover { transform: scale(1.02); box-shadow: 0 4px 15px rgba(239, 68, 68, 0.4); }
-    
-    .insight-card { 
-        background-color: #1e293b; padding: 24px; border-radius: 16px; 
-        border-left: 6px solid #ef4444; margin-bottom: 25px; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+    .stButton>button {
+        background-color: #d32f2f;
+        color: white;
+        border-radius: 8px;
+        font-weight: 600;
+        border: none;
+        transition: 0.3s;
     }
-    section[data-testid="stSidebar"] { background-color: #1e293b !important; border-right: 1px solid #334155; }
+    .stButton>button:hover {
+        background-color: #b71c1c;
+        box-shadow: 0 4px 12px rgba(211, 47, 47, 0.2);
+    }
+    .insight-card {
+        background-color: #fff1f2;
+        padding: 24px;
+        border-radius: 12px;
+        border-left: 5px solid #d32f2f;
+        margin-bottom: 20px;
+        color: #9f1239;
+    }
+    section[data-testid="stSidebar"] {
+        background-color: #ffffff !important;
+        border-right: 1px solid #e2e8f0;
+    }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. THE ENGINE: LEGACY & BURN CALCULATOR ---
+# --- 2. CORE ENGINES ---
 def run_simulation(data, monthly_override=None):
     m_save = monthly_override if monthly_override is not None else data['monthly']
     curr_bal = data['savings']
     
-    # Retirement Lifestyle Math (Adjusted for 2025 Inflation)
+    # Monthly Inflation Calculation
     inf_m = (1 + data['inflation']/100)**(1/12) - 1
     years_to_ret = max(0, data['ret_age'] - data['age'])
+    
+    # Cost of lifestyle at the moment of retirement
     fut_spend = data['spend'] * ((1 + data['inflation']/100) ** years_to_ret)
     gross_draw = fut_spend / (1 - (data['tax']/100))
     
@@ -50,8 +68,7 @@ def run_simulation(data, monthly_override=None):
             # Accumulation Phase
             curr_bal = (curr_bal + m_save) * (1 + (data['roi']/100)/12)
         else:
-            # Decumulation Phase (Burn Rate)
-            # CPP/OAS indexed to inflation
+            # Decumulation Phase
             pension = data['cpp_oas'] * ((1 + data['inflation']/100) ** (age - data['age']))
             curr_bal = (curr_bal - (gross_draw - pension)) * (1 + (4.0/100)/12)
             gross_draw *= (1 + inf_m)
@@ -63,7 +80,6 @@ def run_simulation(data, monthly_override=None):
     return ages, balances, exhaust_age, fut_spend
 
 def solve_for_legacy(data):
-    # Binary Search to find savings needed to hit the exact Legacy Goal
     low, high = 0, 100000
     for _ in range(18):
         mid = (low + high) / 2
@@ -83,99 +99,97 @@ if 'step' not in st.session_state:
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
-# --- 4. SIDEBAR: BURN RATE CHAT ---
+# --- 4. SIDEBAR: BURN RATE ADVISOR ---
 with st.sidebar:
-    st.title("🔥 Burn Rate Analyst")
+    st.header("🔥 Burn Rate Advisor")
     d = st.session_state.data
     _, balances, exhaust_age, fut_spend = run_simulation(d)
     
-    st.markdown("### 📊 Live Stats")
-    status = "⚠️ DEEP BURN" if exhaust_age else "✅ STABLE"
-    st.write(f"**Portfolio Status:** {status}")
-    st.write(f"**Monthly Ret. Burn:** ${fut_spend:,.0f}")
-    st.write(f"**Target Estate:** ${d['legacy']:,}")
+    st.markdown(f"**Assumed Inflation:** {d['inflation']}%")
+    if exhaust_age:
+        st.error(f"⚠️ Exhaustion: Age {exhaust_age}")
+    else:
+        st.success("✅ Plan Sustainable")
     
+    st.write(f"**Retirement Spend:** ${fut_spend:,.0f}/mo")
     st.divider()
     
     for msg in st.session_state.chat_history:
         with st.chat_message(msg["role"]): st.write(msg["content"])
 
-    if prompt := st.chat_input("Ask about your burn rate..."):
+    if prompt := st.chat_input("Ask about inflation or burn..."):
         st.session_state.chat_history.append({"role": "user", "content": prompt})
-        
-        # Burn Rate Logic
-        if "burn" in prompt.lower() or "spend" in prompt.lower():
-            resp = f"Your projected retirement burn rate is ${fut_spend:,.0f}/mo. At your current ROI, this burn will deplete your capital by age {exhaust_age if exhaust_age else '95+' }."
-        elif "legacy" in prompt.lower() or "leave" in prompt.lower():
-            resp = f"To leave ${d['legacy']:,} at age {d['death_age']}, your portfolio cannot drop below that floor. Currently, you are projected to end with ${balances[-1]:,.0f}."
+        if "inflation" in prompt.lower():
+            resp = f"A {d['inflation']}% inflation rate means your ${d['spend']:,} lifestyle today will cost ${fut_spend:,.0f} when you retire."
         else:
-            resp = "I can analyze how your burn rate affects your legacy. Try asking: 'Is my burn rate too high for my legacy goal?'"
-        
+            resp = "Adjust the inflation slider in Step 2 to see how rising costs affect your legacy."
         st.session_state.chat_history.append({"role": "assistant", "content": resp})
         st.rerun()
 
-# --- 5. WIZARD STEPS ---
+# --- 5. MAIN UI ---
+st.title("🇨🇦 Wealth Studio")
+
 if st.session_state.step == 1:
-    st.title("👤 Step 1: Profile")
-    name = st.text_input("Investor Name", st.session_state.data['name'])
+    st.subheader("Step 1: Let's Get to Know You ")
+    name = st.text_input("Name", st.session_state.data['name'])
     c1, c2 = st.columns(2)
     age = c1.number_input("Current Age", 18, 75, st.session_state.data['age'])
-    ret_age = c2.number_input("Target Retirement Age", age+1, 85, st.session_state.data['ret_age'])
-    if st.button("Next: Assets →"):
+    ret_age = c2.number_input("Retirement Age", age+1, 85, st.session_state.data['ret_age'])
+    if st.button("Next: Assets & ROI →"):
         st.session_state.data.update({"name": name, "age": age, "ret_age": ret_age})
         st.session_state.step = 2; st.rerun()
 
 elif st.session_state.step == 2:
-    st.title("📈 Step 2: Asset Allocation")
-    profiles = {"Conservative (4%)": 4.0, "Balanced (5.5%)": 5.5, "Growth (6.5%)": 6.5, "Aggressive (7.5%)": 7.5}
+    st.subheader("Step 2: Assets, ROI & Inflation")
+    profiles = {"Conservative": 4.0, "Balanced": 5.5, "Growth": 6.5, "Aggressive": 7.5}
     c1, c2 = st.columns(2)
-    savings = c1.number_input("Current Liquid Assets ($)", 0, value=st.session_state.data['savings'])
-    monthly = c2.number_input("Current Monthly Savings ($)", 0, value=st.session_state.data['monthly'])
+    savings = c1.number_input("Current Assets ($)", 0, value=st.session_state.data['savings'])
+    monthly = c2.number_input("Monthly Contribution ($)", 0, value=st.session_state.data['monthly'])
     
-    profile = st.selectbox("Select Risk Profile", options=list(profiles.keys()), index=1)
-    roi = st.slider("Fine-tune ROI %", 1.0, 10.0, profiles[profile])
-    if st.button("Next: Legacy & Spending →"):
-        st.session_state.data.update({"savings": savings, "monthly": monthly, "roi": roi})
+    profile = st.selectbox("Risk Profile", options=list(profiles.keys()), index=1)
+    roi = st.slider("Fine-tune ROI (%)", 1.0, 10.0, profiles[profile], step=0.1)
+    
+    # NEW INFLATION ADJUSTMENT FIELD
+    inflation = st.slider("Expected Inflation Rate (%)", 0.0, 6.0, st.session_state.data['inflation'], 
+                          help="FP Canada 2025 standard is 2.1%. Higher inflation increases future costs.")
+    
+    if st.button("Next: Lifestyle & Legacy →"):
+        st.session_state.data.update({"savings": savings, "monthly": monthly, "roi": roi, "inflation": inflation})
         st.session_state.step = 3; st.rerun()
 
 elif st.session_state.step == 3:
-    st.title("🎁 Step 3: Desired Legacy & Spending")
+    st.subheader("Step 3: Legacy & Spending")
     c1, c2 = st.columns(2)
-    spend = c1.number_input("Monthly Desired Spend (Today's $)", 1000, value=st.session_state.data['spend'])
-    legacy = c2.number_input("Desired Amount to Leave Behind ($)", 0, value=st.session_state.data['legacy'])
-    death_age = st.number_input("Plan for Life Expectancy (Age)", 80, 115, st.session_state.data['death_age'])
-    if st.button("Analyze My Future 🚀"):
+    spend = c1.number_input("Monthly Spend (Today's $)", 1000, value=st.session_state.data['spend'])
+    legacy = c2.number_input("Legacy Goal (Estate Target $)", 0, value=st.session_state.data['legacy'])
+    death_age = st.number_input("Plan Duration (Death Age)", 80, 115, st.session_state.data['death_age'])
+    if st.button("Finalize Simulations 🚀"):
         st.session_state.data.update({"spend": spend, "legacy": legacy, "death_age": death_age})
         st.session_state.step = 4; st.rerun()
 
 elif st.session_state.step == 4:
-    d = st.session_state.data
-    ages, balances, exhaust_age, fut_spend = run_simulation(d)
-    req_save = solve_for_legacy(d)
-    gap = req_save - d['monthly']
+    ages, balances, exhaust_age, fut_spend = run_simulation(st.session_state.data)
+    req_save = solve_for_legacy(st.session_state.data)
+    gap = req_save - st.session_state.data['monthly']
 
-    st.title(f"🏆 Financial Vision: {d['name']}")
-    
     st.markdown('<div class="insight-card">', unsafe_allow_html=True)
-    if exhaust_age or balances[-1] < d['legacy']:
-        st.subheader("⚠️ Legacy Gap Identified")
-        st.write(f"To spend ${d['spend']:,}/mo and leave **${d['legacy']:,}** at age {d['death_age']}:")
-        st.write(f"👉 You need to save **${req_save:,.0f}/mo** (Increase of ${max(0, gap):,.0f}).")
+    if exhaust_age or balances[-1] < st.session_state.data['legacy']:
+        st.markdown(f"### ⚠️ Inflation/Legacy Gap")
+        st.write(f"At {st.session_state.data['inflation']}% inflation, you need to save **${req_save:,.0f}/mo** to hit your legacy goal.")
     else:
-        st.subheader("✅ Surplus Plan")
-        st.write(f"Your plan is sustainable. You are projected to leave **${balances[-1]:,.0f}**, exceeding your goal.")
+        st.markdown(f"### ✅ Sustainability Confirmed")
+        st.write(f"Your plan outpaces inflation, leaving an estate of **${balances[-1]:,.0f}**.")
     st.markdown('</div>', unsafe_allow_html=True)
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Peak Wealth", f"${max(balances):,.0f}")
-    c2.metric("Monthly Gap", f"${max(0, gap):,.0f}")
-    c3.metric("Final Estate", f"${balances[-1]:,.0f}")
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Peak Wealth", f"${max(balances):,.0f}")
+    m2.metric("Savings Gap", f"${max(0, gap):,.0f}")
+    m3.metric("Cost at Ret.", f"${fut_spend:,.0f}/mo")
 
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=ages, y=balances, fill='tozeroy', name="Portfolio", line_color="#ef4444", fillcolor="rgba(239, 68, 68, 0.1)"))
-    fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color="#f1f5f9", height=450,
-                      margin=dict(l=0, r=0, t=20, b=0), xaxis_title="Age", yaxis_title="Balance ($)")
+    fig.add_trace(go.Scatter(x=ages, y=balances, fill='tozeroy', line_color="#d32f2f", fillcolor="rgba(211, 47, 47, 0.1)"))
+    fig.update_layout(plot_bgcolor='white', paper_bgcolor='white', xaxis_title="Age", yaxis_title="Net Worth ($)")
     st.plotly_chart(fig, use_container_width=True)
 
-    if st.button("⬅ Adjust Scenario"):
+    if st.button("⬅ Adjust Entries"):
         st.session_state.step = 1; st.rerun()
